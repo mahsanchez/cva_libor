@@ -10,8 +10,11 @@
 #include "curvepoint.h"
 #include "leastsquares.h"
 
+#include <ql/math/solvers1d/bisection.hpp>
+
 //#define DEBUG_CAPSTRIPPING 10
 
+// number of days since 1-01-XXXX/360
 std::vector<double> tenor = {
     //3M, 6M, 9M, 1Y, 1Y3M, 1Y6M, 1Y9M, 2Y, 2Y3M, 2Y6M, 2Y9M, 3Y, 3Y3M, 3Y6M, 3Y9M, 4Y, 4Y3M, 4Y6M, 4Y9M, 5Y
     0.25, 0.50, 0.75, 1.0, 1.25, 1.50, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.50, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0
@@ -36,47 +39,6 @@ std::vector<double> capvols = {
 std::vector<double> vols {
     0.1641, 0.1641, 0.1641, 0.2015, 0.2189, 0.2365, 0.2550, 0.2212, 0.2255, 0.2298, 0.2341, 0.2097, 0.2083, 0.2077, 0.2051, 0.2007, 0.1982, 0.1959, 0.1938
 };
-
-std::vector<std::vector<double>> rho(19, std::vector<double>(19));
-
-// TODO Add Least Square Solution
-
-#ifndef __INTERVAL_BISECTION_H
-#define __INTERVAL_BISECTION_H
-
-template<typename T>
-double interval_bisection(T f, const std::random_device::result_type entropy)
-{
-    std::mt19937 gen(entropy);
-    static const auto lower_bound = 0.01;
-    static const auto upper_bound =  0.80;
-    std::uniform_real_distribution<> dis(lower_bound, upper_bound);
-
-    auto pos_pt = dis(gen);
-    auto neg_pt = dis(gen);
-
-    while (f(pos_pt) < 0.0)
-        pos_pt = dis(gen);
-
-    while (f(neg_pt) > 0.0)
-        neg_pt = dis(gen);
-
-    static const auto about_zero_mag = 1E-6;
-    for (;;)
-    {
-        const auto mid_pt = (pos_pt + neg_pt)/2.0;
-        const auto f_mid_pt = f(mid_pt);
-        if (fabs(f_mid_pt)  < about_zero_mag)
-            return mid_pt;
-
-        if (f_mid_pt >= 0.0)
-            pos_pt = mid_pt;
-        else
-            neg_pt = mid_pt;
-    }
-}
-
-#endif
 
 
 class cpl {
@@ -113,6 +75,30 @@ private:
     double rate;
 };
 
+/* Optimization Contraint */
+class FittingVolConstraint : public Constraint {
+private:
+    class Impl : public Constraint::Impl {
+    public:
+        bool test(const Array& params) const {
+            if ( (params[0] + params[3]) <= 0) return false;
+            if (params[2] <= 0) return false;
+            return true;
+        }
+        Array upperBound(const Array& params) const {
+            return Array(params.size(),
+                         std::numeric_limits < Array::value_type > ::max());
+        }
+        Array lowerBound(const Array& params) const {
+            return Array(params.size(), 0.0);
+        }
+    };
+public:
+    FittingVolConstraint()
+            : Constraint(ext::shared_ptr<Constraint::Impl>(new FittingVolConstraint::Impl)) {}
+};
+
+/* Caplet Volatility & Volatility Fitting */
 
 class CplVolCalibration {
 public:
@@ -171,8 +157,7 @@ public:
             caps[i-1] = result;
         }
 
-        std::random_device rd;
-        static const auto entropy = rd();
+        Bisection root_solver;
 
         //Caculate Implied Caplet Volatilities
         for (int i = 1; i < size-1; i++) {
@@ -193,9 +178,9 @@ public:
             };
 
             // root finding using interval bisection algorithm
-            cplvols[i] = interval_bisection(cpl_functor, entropy);
+            cplvols[i] = root_solver.solve(cpl_functor, 1E-6, 0.1, 0.01, 0.60);
 
-#ifdef DEBUG_CAPSTRIPPING
+#ifndef DEBUG_CAPSTRIPPING
             std::cout << i << " capvol vs cplvol" << capvols[i] << " " << cplvols[i]  << std::endl;
 #endif
         }
@@ -203,113 +188,98 @@ public:
     }
 
     /* Volatility Fitting - solve optimization problem  argmin sum[cplvols - fitvols]^2 using least square methods */
-    void volatility_fitting() {
-        int size = expiry/dtau;
-
-        /*
-        // instvol = phi * [ (a + b*(T - t)) * exp(-c* (T - t)) + d] * 1 {t < T}
-        for (int i = 0; i < size; i++) {
-            fitvols[i] = phi * ( (a + b*(yearFraction[i] - t)) * std::exp(-c* (yearFraction[i]  - t)) + d );
-        }
-        //Find a,b, c, d using Least Square methods (intel MKL dgels)
-        //int info = LAPACKE_dgels( LAPACK_ROW_MAJOR, 'N', m, n, nrhs, &cplvols[0], lda, &fitvols[0], ldb );
-        */
-
-        const double phi = 1.0;
-        double a = -0.1;
-        double b = 0.5;
-        double c = 1.0;
-        double d = 0.1;
-
-        curveFitting();
-
-        // instvols is a 1-d vector instvol = phi * [ (a + b*(T - t)) * exp(-c* (T - t)) + d] * 1 {t < T}
-        instvols.resize(size, std::vector<double>(size));
-
-        // convert from instanteneous volatility to LMM volatilities using piece wise 2-d vector
-        for (int i = 1; i < size; i++) {
-            for (int j = 0; j < i; j++) {
-                double term = (tenor[i-1] - tenor[j]);
-                instvols[i][j] = phi * ( (a + b*term) * std::exp(-c*term) + d );
-            }
-        }
-
-    }
-
     /*
      * QuantLib Least Squares Method implementation
     // http://mikejuniperhill.blogspot.com/2016/04/quantlib-least-squares-method.html
      */
-    void curveFitting() {
-        // 2nd degree polynomial least squares fitting for a curve
-        // create observed market rates for a curve
-        Array independentValues(20);
-        independentValues[0] = 0.1641; independentValues[1] = 0.1641; independentValues[2] = 0.1641;
-        independentValues[3] = 0.2015; independentValues[4] = 0.2189; independentValues[5] = 0.2365;
-        independentValues[6] = 0.2550; independentValues[7] = 0.2212; independentValues[8] = 0.2255;
-        independentValues[9] = 0.2298; independentValues[10] = 0.2341; independentValues[11] = 0.2097;
-        independentValues[12] = 0.2083; independentValues[13] = 0.2077; independentValues[14] = 0.2051;
-        independentValues[15] = 0.2007; independentValues[16] = 0.1982; independentValues[17] = 0.1959;
-        independentValues[18] = 0.1938; independentValues[19] = 0.1925;
-        //
+    void volatility_fitting() {
+        // create implied caplet volatilities for a curve LMM in practice page Chapter 7
+        Array independentValues(capletvols.size());
+        for (int i = 0; i < capletvols.size(); i++) {
+            independentValues[i] = tenor[i+1] * capletvols[i] * capletvols[i];
+        }
+
+        // initial values
+        double t = 0.0;
         const double phi = 1.0;
         double a = 0.1;
         double b = 0.1;
         double c = 0.1;
         double d = 0.1;
 
-        auto calibration_functor = [&](double T, double t) {
-            return phi * ( (a + b*(T - t)) * std::exp(-c*(T - t)) + d );
+        // instantaneous volatility curve parametric expression phi * f(a, b, c, d , [Ti - 0])
+        auto parametric_calibration = [&](double T, double t) {
+            double val = (a + b*(T - t)) * std::exp(-c*(T - t)) + d;
+            std::cout << T << a  << " " << b  << " "  << c << " " << d  << " " << val << std::endl;
+            return val;
         };
 
         // create corresponding curve points to be approximated
         std::vector<boost::shared_ptr<CurvePoint>> curvePoints;
         for (int i = 0; i < independentValues.size(); i++) {
-            curvePoints.push_back(boost::shared_ptr<CurvePoint>(
-                  new CurvePoint(calibration_functor(tenor[i], 0.0) )));
+            double val = parametric_calibration(tenor[i+1], 0);
+            //double val1 = parametric_calibration(tenor[i], 0);
+            //val = val*val - val1*val1;
+            curvePoints.push_back(boost::shared_ptr<CurvePoint>( new CurvePoint( val )));
         }
 
-        //
         // create container for function pointers for calculating rate approximations
         std::vector<boost::function<Real(const Array&)>> dependentFunctions;
-        //
+
         // for each curve point object, bind function pointer to operator() and add it into container
         for (unsigned int i = 0; i < curvePoints.size(); i++)
         {
             dependentFunctions.push_back(boost::bind(&CurvePoint::operator(), curvePoints[i], _1));
         }
+
         // perform least squares fitting and print optimized coefficients
         LeastSquares leastSquares(boost::shared_ptr<OptimizationMethod>(new LevenbergMarquardt), 10000, 1000, 1E-09, 1E-09, 1E-09);
-        NoConstraint parametersConstraint;
+        FittingVolConstraint parametersConstraint;
         Array initialParameters(4, 0.1);
         Array coefficients = leastSquares.Fit(independentValues, dependentFunctions, initialParameters, parametersConstraint);
 
-        a = initialParameters[0];
-        b = initialParameters[1];
-        c = initialParameters[2];
-        d = initialParameters[3];
-
-        for (int i = 0; i < independentValues.size(); i++) {
-            std::cout << phi * ( (a + b*(tenor[i] - 0.0)) * std::exp(-c*(tenor[i] - 0.0)) + d ) << std::endl;
-        }
-
-        for (unsigned int i = 0; i < coefficients.size(); i++)
-        {
+#ifdef DEBUG_FITTEDVOL
+        for (unsigned int i = 0; i < coefficients.size(); i++) {
             std::cout << coefficients[i] << std::endl;
+        }
+#endif
+        a = coefficients[0]; //0.112346;
+        b = coefficients[1]; //-0.441811
+        c = coefficients[2]; //0.9715590
+        d = coefficients[3]; //1.223058
+
+        instvols.resize(independentValues.size());
+        for (unsigned int i = 0; i < independentValues.size(); i++) {
+            instvols[i] = parametric_calibration (tenor[i+1], 0.0);
         }
     }
 
 
     void correlation() {
         double beta = 0.1;
-        int size = expiry/dtau;
-        rho.resize(size, std::vector<double>(size));
+        int size = instvols.size();
+        rho.resize(size, std::vector<double>(size, 1.0));
 
-        for (int i = 1; i < size; i++) {
+        // Calculate the reminder values
+        for (int i = 0; i < size; i++) {
             for (int j = 0; j < size; j++) {
-                rho[i-1][j] = std::exp( -beta * (tenor[i] - tenor[j]) );
+                if ( (i != j) && (i > j) ){
+                    double value = std::exp( -beta * (tenor[i] - tenor[j]) );
+                    rho[i][j] = value;
+                    rho[j][i] = value;
+                }
             }
         }
+
+#ifndef DEBUG_CORRELATION
+        for (int i = 0; i < size; i++) {
+            for (int j = 0; j < size; j++)
+            {
+                cout << rho[i][j] << " ";
+            }
+            std::cout << std::endl;
+        }
+#endif
     }
 
     void calibrate() {
@@ -317,6 +287,7 @@ public:
         caplet_volatility_stripping();
         volatility_fitting();
         correlation();
+        int i = 0;
     }
 
 private:
@@ -328,7 +299,11 @@ private:
     std::vector<double> rates;
     std::vector<double> strikes;
     std::vector<double> cplvols;
-    std::vector<std::vector<double>> instvols;
+    std::vector<double> instvols;
+    std::vector<double> capletvols = {
+        0.1641, 0.1641, 0.2015, 0.2189, 0.2365, 0.2550, 0.2212, 0.2255, 0.2298,
+        0.2341, 0.2097, 0.2083, 0.2077, 0.2051, 0.2007, 0.1982, 0.1959, 0.1938, 0.1925
+    };
     std::vector<std::vector<double>> rho;
 
 };
