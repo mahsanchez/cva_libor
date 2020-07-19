@@ -54,15 +54,21 @@ struct cva_stats {
 
 
 void report_statistics(std::vector<cva_stats>& stats_vector, std::vector<std::vector<double>>& exposures, int timepoints_size, int simN) {
+    //std::vector<double> mc_datapoints(simN);
     for (int t = 0; t < timepoints_size; t++) {
         accumulator_set<double, stats<tag::mean, tag::p_square_quantile, tag::max > > acc(quantile_probability = 0.75 );;
         for (int simulation = 0; simulation < simN; simulation++) {
+            //mc_datapoints[simulation] = exposures[t][simulation];
             acc( exposures[t][simulation] );
         }
         stats_vector[t].average = mean(acc);
         stats_vector[t].quantile_75 = p_square_quantile(acc);
         stats_vector[t].max = boost::accumulators::max(acc);;
+        acc = {};
+#ifndef DEBUG_STATISTICS
+#endif
     }
+    int a = 0;
 }
 
 /**
@@ -80,10 +86,10 @@ int main() {
     std::vector<double> fixed_schedule = {
             0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0
     };
-    InterestRateSwap payOff(floating_schedule, floating_schedule,  fixed_schedule, 10, 0.02, expiry, dtau);
+    InterestRateSwap payOff(floating_schedule, floating_schedule,  fixed_schedule, 10, 0.025, expiry, dtau);
 
     //  Increase the simulations numbers and analyze convergence and std deviation
-    int simN = 5000;
+    int simN = 3000;
     double duration = 0.0;
 
     /*
@@ -91,10 +97,11 @@ int main() {
      */
     std::vector<double> vols;
     std::vector<std::vector<double>> rho;
+    std::vector<double> spot_rates_;
 
     // Instantaneous Volatility Calibration and Correlation Matrix
     CplVolCalibration cplVolCalibration(yearFractions, bonds, capvols, expiry); //dtau 1Y
-    cplVolCalibration.calibrate( vols, rho);
+    cplVolCalibration.calibrate( vols, rho, spot_rates_);
 
     // Initialize the gaussians variates
     int size = expiry/dtau;
@@ -113,7 +120,15 @@ int main() {
     MonteCarloSimulation<LiborMarketModel, InterestRateSwap> mc_engine(payOff, lmm, phi_random, simN);
     mc_engine.calculate(exposures, duration);
 
-    //display_curve(exposures[s], "IRS Exposure"); ///
+#ifdef DEBUG_EXPOSURE_CVA
+    for (int i = 0; i < exposures.size(); i++) {
+        for (int j = 0; j < exposures[j].size(); j++) {
+            std::cout << exposures[i][j] << " ";
+        }
+        std::cout << std::endl;
+    }
+#endif
+
 
     /*
      * Counter Party Credit Risk Analytics

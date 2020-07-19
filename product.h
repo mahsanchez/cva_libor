@@ -147,53 +147,6 @@ private:
 􏰷 The fixed and floating leg frequencies and day count bases are assumed to be the same for simplicity.
  */
 
-class VanillaInterestRateSwapPricer { //InterestRateSwap
-public:
-    VanillaInterestRateSwapPricer(InterestRateSwap& irs_, std::vector<double>& forward_rates_, std::vector<double>& discount_factors_, int maturity_) :
-            irs(irs_), forward_rates(forward_rates_), discount_factors(discount_factors_), maturity(maturity_)
-    {
-          calculate();
-    };
-
-    double floatingLeg() {
-        double price = 0.0;
-        for (int i = 0; i < forward_rates.size(); i++) {
-            double sum = irs.dtau;
-            sum *= forward_rates[i];
-            sum *= discount_factors[i];
-            price += sum;
-        }
-        return price;
-    }
-
-    double fixedLeg() {
-        double price = 0.0;
-        for (int i = 0; i < discount_factors.size(); i++) {
-            double sum = irs.dtau;
-            sum *= irs.K;
-            sum *= discount_factors[i];
-            price += sum;
-        }
-        return price;
-    }
-
-    void calculate() {
-        npv = floatingLeg() - fixedLeg();
-        npv *= irs.notional;
-    }
-
-    double price() {
-        return npv;
-    }
-
-private:
-    InterestRateSwap& irs;
-    std::vector<double>& forward_rates;
-    std::vector<double>& discount_factors;
-    int maturity;
-    double npv = 0.0;
-};
-
 
 /*
  * SurvivalProbabilityTermStructure

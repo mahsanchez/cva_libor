@@ -47,23 +47,23 @@ public:
     // LMM SDE
     void simulate(double *gaussian_rand) {
         double vol = 0.15;
-        std::vector<double> dW(size, 0.0);
 
         // compute forward rates
-        for (int n = 0; n < size-1; n++) {
+        for (int n = 0; n < size; n++) {
             for (int i = n + 1; i < size; i++) {
                 double drift = 0.0;
-                for (int k = i + 1; k < size; k++) {
+                for (int k = i; k < size - 1; k++) {
                     vol = volatility[k];
                     drift =+ (vol  * dtau * fwd_rates[k][n])/ (1 + dtau * fwd_rates[k][n]) * rho[i][k];
                 }
-                vol = volatility[n];
+                vol = volatility[i];
                 double dfbar = (-drift * vol - 0.5*vol*vol) * dtau;
                 dfbar += vol * gaussian_rand[n + 1] * std::sqrt(dtau);
                 fwd_rates[i][n+1] = fwd_rates[i][n] * std::exp(dfbar);
             }
         }
         // compute discount factors
+        discount_factors[0][0] = 1.0;
         for (int t = 0; t < size; t++) {
             for (int i = t + 1; i < size; i++) {
                 double accuml = 1.0;
@@ -92,9 +92,13 @@ public:
 
     // return forward_rates & discount_factors
     void numeraire(int index, std::vector<double> &forward_rates, std::vector<double> &discount_factor) {
-        for (int t = index; t < size ; t++) {
-            discount_factor[t] = discount_factors[t][index];
-            forward_rates[t] = fwd_rates[t][index];
+
+        std::fill(forward_rates.begin(), forward_rates.end(), 0.0);
+        std::fill(discount_factor.begin(), discount_factor.end(), 0.0);
+
+        for (int t = 0; t < size - index; t++) {
+            discount_factor[t] = discount_factors[t+index][index];
+            forward_rates[t] = fwd_rates[t+index][index];
         }
     }
 
@@ -107,6 +111,7 @@ private:
     std::vector<double> &volatility;
     std::vector<std::vector<double>> fwd_rates;
     std::vector<std::vector<double>> discount_factors;
+    std::vector<std::vector<double>> volatilities;
     int size;
     double dtau;
     double expiry;
@@ -116,11 +121,20 @@ private:
         // reserve memory
         fwd_rates = std::vector<std::vector<double>>(size, std::vector<double>(size, 0.0));
         discount_factors = std::vector<std::vector<double>>(size, std::vector<double>(size, 0.0));
+        volatilities = std::vector<std::vector<double>>(size, std::vector<double>(size, 0.0));
         // Initialize fwd_rates from the spot rate curve
         for (int i = 0; i < size; i++) {
             fwd_rates[i][0] = spot_rates[i];
         }
         // initialize vol using PieceWise Constant Volatility Brigo & Mercurio p211
+        int end = 1;
+        for (int i = 1; i < size; i++) {
+            for (int j = 0; j < end; j++) {
+                volatilities[i][j] = volatility[i];
+            }
+            end++;
+        }
+        int c = 0;
     }
 
 };
@@ -177,10 +191,19 @@ public:
      */
     void pricePayOff(std::vector<double> &exposure) {
 
-        for (int i = 0; i < model.getSize(); i++) {
+        for (int i = 1; i < model.getSize(); i++) {
             model.numeraire(i, forward_rates, discount_factors);
-            VanillaInterestRateSwapPricer pricer(payOff, forward_rates, discount_factors, model.getSize() - i);
-            exposure[i] = std::max(pricer.price(), 0.0);
+
+            auto irs_pricer = [&]() {
+                double price = 0;
+                for (int i = 0; i < forward_rates.size(); i++) {
+                    double sum = discount_factors[i] * payOff.notional * payOff.dtau * ( forward_rates[i] - payOff.K );
+                    price += sum;
+                }
+                return price;
+            };
+
+            exposure[i] = std::max(irs_pricer(), 0.0);
         }
 #ifndef DEBUG
         display_curve(exposure, "IRS Exposure");
