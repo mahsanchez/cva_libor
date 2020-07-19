@@ -38,37 +38,62 @@ class LiborMarketModel {
 public:
 
     LiborMarketModel(std::vector<double> &spot_rates, std::vector<double>& instvol, std::vector<std::vector<double>>& rho_, double dtau_, double expiry_) :
-            rho(rho_), dtau(dtau_), expiry(expiry_)
+            volatility(instvol), rho(rho_), dtau(dtau_), expiry(expiry_)
     {
-        size = expiry/dtau;
-         initialize(spot_rates, instvol);
+        size = instvol.size() + 1;
+        initialize(spot_rates, instvol);
     }
 
     // LMM SDE
     void simulate(double *gaussian_rand) {
-        for (int i = 1; i < size; i++) {
-            for (int t = 1; t < size; t++) {
+        double vol = 0.15;
+        std::vector<double> dW(size, 0.0);
+
+        // compute forward rates
+        for (int n = 0; n < size-1; n++) {
+            for (int i = n + 1; i < size; i++) {
                 double drift = 0.0;
-                for (int j = i+1; j < size; j++) {
-                    drift += ( dtau * volatilities[j][t-1] * fwd_rates[j][t-1] )/(1 + dtau*fwd_rates[j][t-1]);
+                for (int k = i + 1; k < size; k++) {
+                    vol = volatility[k];
+                    drift =+ (vol  * dtau * fwd_rates[k][n])/ (1 + dtau * fwd_rates[k][n]) * rho[i][k];
                 }
-                double dfbar = drift * rho[i][t-1];
-                dfbar += -0.5 * volatilities[i][t-1] * volatilities[i][t-1];
-                dfbar *= dtau;
-                dfbar += volatilities[i][t-1] * gaussian_rand[ i * size + (t-1)] * std::sqrt(dtau);
-                fwd_rates[i][t] = fwd_rates[i][t-1] * std::exp(dfbar);
+                vol = volatility[n];
+                double dfbar = (-drift * vol - 0.5*vol*vol) * dtau;
+                dfbar += vol * gaussian_rand[n + 1] * std::sqrt(dtau);
+                fwd_rates[i][n+1] = fwd_rates[i][n] * std::exp(dfbar);
             }
         }
+        // compute discount factors
+        for (int t = 0; t < size; t++) {
+            for (int i = t + 1; i < size; i++) {
+                double accuml = 1.0;
+                for (int k = t; k < i; k++) {
+                    accuml *= 1 / (1 + dtau * fwd_rates[k][t]);
+                }
+                discount_factors[i][t] = accuml;
+            }
+        }
+#ifndef DEBUG_LMM_NUMERAIRE
+        for (int i = 0; i < size; i++) {
+            for (int j = 0; j < size; j++) {
+                std::cout << fwd_rates[i][j] << " ";
+            }
+            std::cout << std::endl;
+        }
+
+        for (int i = 0; i < size; i++) {
+            for (int j = 0; j < size; j++) {
+                std::cout << discount_factors[i][j] << " ";
+            }
+            std::cout << std::endl;
+        }
+#endif
     }
 
     // return forward_rates & discount_factors
-    void numeraire(int index, std::vector<double> forward_rates, std::vector<double> discount_factors) {
+    void numeraire(int index, std::vector<double> &forward_rates, std::vector<double> &discount_factor) {
         for (int t = index; t < size ; t++) {
-            double accuml = 1.0;
-            for (int k = size; k < index - 1; k--) {
-                accuml *= (1 + dtau * fwd_rates[k][t]);
-            }
-            discount_factors[t] = 1/accuml;
+            discount_factor[t] = discount_factors[t][index];
             forward_rates[t] = fwd_rates[t][index];
         }
     }
@@ -79,8 +104,9 @@ public:
 
 private:
     std::vector<std::vector<double>> &rho;
-    std::vector<std::vector<double>> volatilities;
+    std::vector<double> &volatility;
     std::vector<std::vector<double>> fwd_rates;
+    std::vector<std::vector<double>> discount_factors;
     int size;
     double dtau;
     double expiry;
@@ -88,20 +114,13 @@ private:
     // Initialize data structures
     void initialize(std::vector<double> &spot_rates, std::vector<double>& instvol) {
         // reserve memory
-        volatilities = std::vector<std::vector<double>>(size, std::vector<double>(size, 0.0));
         fwd_rates = std::vector<std::vector<double>>(size, std::vector<double>(size, 0.0));
-        // initialize vol using PieceWise Constant Volatility Brigo & Mercurio p211
-        int count = size;
-        for (int i = 0; i < size; i++) {
-            for (int j = i; j < count; j++) {
-                volatilities[j][i] = instvol[j];
-            }
-            count--;
-        }
+        discount_factors = std::vector<std::vector<double>>(size, std::vector<double>(size, 0.0));
         // Initialize fwd_rates from the spot rate curve
         for (int i = 0; i < size; i++) {
             fwd_rates[i][0] = spot_rates[i];
         }
+        // initialize vol using PieceWise Constant Volatility Brigo & Mercurio p211
     }
 
 };
@@ -117,7 +136,7 @@ private:
 template<typename InterestRateModel, typename PayOff>
 class MonteCarloSimulation {
 public:
-    MonteCarloSimulation(PayOff &payOff_, InterestRateModel &model_, double* phi_random_, int simN_) :
+    MonteCarloSimulation(PayOff &payOff_, InterestRateModel &model_, std::vector<double> &phi_random_, int simN_) :
             payOff(payOff_), phi_random(phi_random_), model(model_), simN(simN_)
      {
         forward_rates = std::vector<double>(model.getSize());
@@ -134,7 +153,7 @@ public:
         for (int sim = 1; sim < simN; sim++) {
 
             // Evolve the Forward Rates Risk Factor Simulation Path using Interest Rate Model
-            generatePaths(phi_random + simN*model.getSize() * model.getSize());
+            generatePaths(&phi_random[sim * model.getSize() * model.getSize()]);
 
             // Interest Rate Swap Mark to Market pricing the IRS across all pricing points
             pricePayOff(exposures[sim]);
@@ -163,13 +182,13 @@ public:
             VanillaInterestRateSwapPricer pricer(payOff, forward_rates, discount_factors, model.getSize() - i);
             exposure[i] = std::max(pricer.price(), 0.0);
         }
-#if DEBUG
+#ifndef DEBUG
         display_curve(exposure, "IRS Exposure");
 #endif
     }
 
 protected:
-    double* phi_random;
+    std::vector<double>& phi_random;
     PayOff &payOff;
     InterestRateModel &model;
     std::vector<double> forward_rates;

@@ -11,36 +11,6 @@
 #include "mkl_vsl.h"
 
 
-// Summation
-double recursive_summation(double *f, int N) {
-    double sum = 0.0;  // the sum being accumulated
-    for (int i = 0; i < N; i++) {
-        sum += f[i];
-    }
-    return sum;
-}
-
-double kahan_summation(double *f, int N) {
-    double sum = 0.0;  // the sum being accumulated
-    double c = 0.0;    // the compensation for lost precision
-    double y, t;
-    for (int i = 0; i < N; i++) {
-        y = f[i] - c;
-        t = sum + y;
-        c = (t - sum) - y;
-        sum = t;
-    }
-    return sum;
-}
-
-double cblas_summation(double *f, int N, int stride = 1) {
-    return cblas_dasum(N, f, stride );
-}
-
-double pairwise_summation(double *f, int N) {
-    return 0.0;
-}
-
 /**
  * percentile
  */
@@ -62,20 +32,6 @@ void prefix_sum(double *prefixSum, double *arr, int n)
     for (int i = 1; i < n; i++) {
         prefixSum[i] = prefixSum[i - 1] + arr[i];
     }
-}
-
-template <typename F>
-float trapezoidal(F f, double a, double b, int n, double h)
-{
-    // Computing sum of first and last terms in above formula
-    double s = f(a) + f(b);
-
-    // Adding middle terms in above formula
-    for (int i = 1; i < n; i++)
-        s += 2 * f(a + i*h);
-
-    // h/2 indicates (b-a)/2n. Multiplying h/2 with s.
-    return 0.5 * h * s;
 }
 
 
@@ -198,95 +154,6 @@ int test()
     int a[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
     transpose(a, a + 8, 4);
     std::copy(a, a + 8, std::ostream_iterator<int>(std::cout, " "));
-}
- * */
-
-/**
- * CUDA binary search to lower, upper found on linear interpolation
- * #include <iostream>
-#include <climits>
-#include <assert.h>
-
-__device__  __host__
-int midpoint(int a, int b)
-{
-    return a + (b-a)/2;
-}
-
-__device__ __host__
-int eval(int A[], int i, int val, int imin, int imax)
-{
-
-    int low = (A[i] <= val);
-    int high = (A[i+1] > val);
-
-    if (low && high) {
-        return 0;
-    } else if (low) {
-        return -1;
-    } else {
-        return 1;
-    }
-}
-
-__device__ __host__
-int binary_search(int A[], int val, int imin, int imax)
-{
-    while (imax >= imin) {
-        int imid = midpoint(imin, imax);
-        int e = eval(A, imid, val, imin, imax);
-        if(e == 0) {
-            return imid;
-        } else if (e < 0) {
-            imin = imid;
-        } else {
-            imax = imid;
-        }
-    }
-
-    return -1;
-}
-
-
-__device__ __host__
-int linear_search(int A[], int val, int imin, int imax)
-{
-    int res = -1;
-    for(int i=imin; i<(imax-1); i++) {
-        if (A[i+1] > val) {
-            res = i;
-            break;
-        }
-    }
-
-    return res;
-}
-
-template<int version>
-__global__
-void search(int * source, int * result, int Nin, int Nout)
-{
-    extern __shared__ int buff[];
-    int tid = threadIdx.x + blockIdx.x*blockDim.x;
-
-    int val = INT_MAX;
-    if (tid < Nin) val = source[threadIdx.x];
-    buff[threadIdx.x] = val;
-    __syncthreads();
-
-    int res;
-    switch(version) {
-
-        case 0:
-        res = binary_search(buff, threadIdx.x, 0, blockDim.x);
-        break;
-
-        case 1:
-        res = linear_search(buff, threadIdx.x, 0, blockDim.x);
-        break;
-    }
-
-    if (tid < Nout) result[tid] = res;
 }
 
 **/

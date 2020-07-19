@@ -28,20 +28,6 @@ std::vector<double> timepoints = {
         17.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0, 21.5, 22.0, 22.5, 23.0, 23.5, 24.0, 24.5, 25.0
 };
 
-// Cache Flow Schedule Interest Rate Swap product 6M Euribor 10Y
-std::vector<double> pricing_points = {
-        0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0
-};
-
-// Interest Rate Swap Cash Flows
-
-std::vector<double> floating_schedule = {
-        0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0
-};
-
-std::vector<double> fixed_schedule = {
-        0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0
-};
 
 // Exposure Points
 std::vector<double> exposure_timepoints = {
@@ -171,7 +157,7 @@ public:
 
     double floatingLeg() {
         double price = 0.0;
-        for (int i = 0; i < maturity; i++) {
+        for (int i = 0; i < forward_rates.size(); i++) {
             double sum = irs.dtau;
             sum *= forward_rates[i];
             sum *= discount_factors[i];
@@ -182,7 +168,7 @@ public:
 
     double fixedLeg() {
         double price = 0.0;
-        for (int i = 0; i < maturity; i++) {
+        for (int i = 0; i < discount_factors.size(); i++) {
             double sum = irs.dtau;
             sum *= irs.K;
             sum *= discount_factors[i];

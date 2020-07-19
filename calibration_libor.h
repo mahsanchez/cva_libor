@@ -192,7 +192,7 @@ public:
      * QuantLib Least Squares Method implementation
     // http://mikejuniperhill.blogspot.com/2016/04/quantlib-least-squares-method.html
      */
-    void volatility_fitting() {
+    void volatility_fitting(std::vector<double> &instvols) {
         // create implied caplet volatilities for a curve LMM in practice page Chapter 7
         Array independentValues(capletvols.size());
         for (int i = 0; i < capletvols.size(); i++) {
@@ -255,9 +255,8 @@ public:
     }
 
 
-    void correlation() {
+    void correlation(std::vector<std::vector<double>> &rho, int size) {
         double beta = 0.1;
-        int size = instvols.size();
         rho.resize(size, std::vector<double>(size, 1.0));
 
         // Calculate the reminder values
@@ -282,12 +281,11 @@ public:
 #endif
     }
 
-    void calibrate() {
+    void calibrate(std::vector<double> &instvols, std::vector<std::vector<double>> &rho) {
         caps_strikes();
         caplet_volatility_stripping();
-        volatility_fitting();
-        correlation();
-        int i = 0;
+        volatility_fitting(instvols);
+        correlation(rho, instvols.size());
     }
 
 private:
@@ -299,11 +297,10 @@ private:
     std::vector<double> rates;
     std::vector<double> strikes;
     std::vector<double> cplvols;
-    std::vector<double> instvols;
+    //std::vector<double> instvols;
     std::vector<double> capletvols = {
         0.1641, 0.1641, 0.2015, 0.2189, 0.2365, 0.2550, 0.2212, 0.2255, 0.2298,
         0.2341, 0.2097, 0.2083, 0.2077, 0.2051, 0.2007, 0.1982, 0.1959, 0.1938, 0.1925
     };
-    std::vector<std::vector<double>> rho;
 
 };

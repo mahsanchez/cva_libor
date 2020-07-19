@@ -1,21 +1,29 @@
 #include <iostream>
 #include <vector>
 #include <iterator>
-#include <cmath>
+#include <algorithm>
 
-//#include "calibration.h"
+#include <boost/accumulators/accumulators.hpp>
+#include <boost/accumulators/statistics/stats.hpp>
+#include <boost/accumulators/statistics/mean.hpp>
+#include <boost/accumulators/statistics/max.hpp>
+#include <boost/accumulators/statistics/min.hpp>
+#include <boost/accumulators/statistics/p_square_quantile.hpp>
+
 #include "simulation.h"
 #include "calibration_libor.h"
 
-using namespace std;
+using namespace boost::accumulators;
 
 const int tenor_size = 51;
 
 // First row is the last observed forward curve (BOE data)  //  3-dimensional Normal random vector in columns BC, BD, BE (on far right)
-std::vector<double> spot_rates = {0.046138361,0.045251174,0.042915805,0.04283311,0.043497719,0.044053792,0.044439518,0.044708496,0.04490347,0.045056615,0.045184474,0.045294052,0.045386152,0.045458337,0.045507803,0.045534188,0.045541867,0.045534237,0.045513128,0.045477583,0.04542292,0.045344477,0.04523777,0.045097856,0.044925591,0.04472353,0.044494505,0.044242804,0.043973184,0.043690404,0.043399223,0.043104398,0.042810688,0.042522852,0.042244909,0.041978295,0.041723875,0.041482518,0.04125509,0.041042459,0.040845492,0.040665047,0.040501255,0.040353009,0.040219084,0.040098253,0.039989288,0.039890964,0.039802053,0.039721437,0.03964844};
+std::vector<double> spot_rates = {
+        0.046138361,0.045251174,0.042915805,0.04283311,0.043497719,0.044053792,0.044439518,0.044708496,0.04490347,0.045056615,0.045184474,0.045294052,0.045386152,0.045458337,0.045507803,0.045534188,0.045541867,0.045534237,0.045513128,0.045477583,0.04542292,0.045344477,0.04523777,0.045097856,0.044925591,0.04472353,0.044494505,0.044242804,0.043973184,0.043690404,0.043399223,0.043104398,0.042810688,0.042522852,0.042244909,0.041978295,0.041723875,0.041482518,0.04125509,0.041042459,0.040845492,0.040665047,0.040501255,0.040353009,0.040219084,0.040098253,0.039989288,0.039890964,0.039802053,0.039721437,0.03964844
+};
 
 
-// Spreads
+// CDS Spreads IRELAND
 std::vector<double> spreads = {
         208.5, 187.5, 214, 235, 255, 272, 225, 233, 218, 215, 203, 199, 202, 196.71, 225.92, 219.69, 229.74, 232.12, 223.02, 224.45, 212, 211.51, 206.25, 203.37, 212.94, 211.02, 210.06, 206.23, 211.49, 209.09, 204.3, 204.77,
         199.98, 200.94, 202.38, 205.72, 204.76, 210.02, 209.54, 209.54, 212.41, 213.35, 208.57, 208.56, 220.05, 226.26, 227.2, 222.89, 228.63, 231.5, 247.75, 255.37, 251.07,
@@ -36,53 +44,24 @@ std::vector<double> spreads = {
         118.64, 122.71, 124.86, 121.27, 120.79
 };
 
-//
-// Cache Flow Schedule Interest Rate Swap product 3M Euribor 10Y
-std::vector<double> sim_points = {
-        0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0
+struct cva_stats {
+    double average;
+    double median;
+    double max;
+    double quantile_75;
+    double quartiles;
 };
 
 
-/*
- * Risk Factor Simulation Grid Matrix MAX_SIM x MAX_TENOR double array
- */
-const int MAX_SIM = 5000;
-const int MAX_TENOR = 51;
-const double MAX_EXPIRY = 10.0;
-const double DTAU = 0.5;
-
-// Generate a grid of tenor_size x simN contains the risk factors Forward Rates F(t, T1, T2) from 0 .. T (expiry)
-std::vector<std::vector<double>> fwd_rates(MAX_SIM, std::vector<double>(MAX_TENOR, 0.0));
-
-// Gaussian Randoms
-std::vector<double> phi_random(MAX_SIM*3, 0.0);
-
-//
-const int simpoints_size = MAX_EXPIRY/DTAU + 1;
-//
-std::vector<double> exposure(simpoints_size, 0.0);
-
-// Generate one Exposure Profile by Simulation Step
-std::vector<std::vector<double>> exposures(MAX_SIM, std::vector<double>(simpoints_size, 0.0));
-
-/*
- *  Reduction to produce the expected exposure profile EE[t] curve for the IRS
- * Expected Exposure  EPE(t) = 𝔼 [max(V , 0)|Ft]
-*/
-inline double average(double sum, double N) {
-    return sum/N;
-}
-
-// TODO - reverse loop and accumulate the value on each t (unroll) loop
-void reduce(std::vector<double>& expected_exposure, std::vector<std::vector<double>>& exposures, int timepoints_size, int simN) {
-    const double term = 1.0/(double)simN;
-
+void report_statistics(std::vector<cva_stats>& stats_vector, std::vector<std::vector<double>>& exposures, int timepoints_size, int simN) {
     for (int t = 0; t < timepoints_size; t++) {
-        double sum = 0.0;
+        accumulator_set<double, stats<tag::mean, tag::p_square_quantile, tag::max > > acc(quantile_probability = 0.75 );;
         for (int simulation = 0; simulation < simN; simulation++) {
-            sum += exposures[simulation][t];
+            acc( exposures[t][simulation] );
         }
-        expected_exposure[t] = average(sum, simN) ;
+        stats_vector[t].average = mean(acc);
+        stats_vector[t].quantile_75 = p_square_quantile(acc);
+        stats_vector[t].max = boost::accumulators::max(acc);;
     }
 }
 
@@ -94,8 +73,14 @@ int main() {
     const double expiry = 5.0;
     const double dtau = 0.25;
 
-    // Interest Rate Swap Instrument 3M floating 3M fixed
-    InterestRateSwap payOff(pricing_points, floating_schedule,  fixed_schedule, 10, 0.01, expiry, dtau);
+    // Interest Rate Swap Product Definition 5Y Floating, 5Y Fixing 3M reset
+    std::vector<double> floating_schedule = {
+            0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0
+    };
+    std::vector<double> fixed_schedule = {
+            0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0
+    };
+    InterestRateSwap payOff(floating_schedule, floating_schedule,  fixed_schedule, 10, 0.02, expiry, dtau);
 
     //  Increase the simulations numbers and analyze convergence and std deviation
     int simN = 5000;
@@ -107,26 +92,28 @@ int main() {
     std::vector<double> vols;
     std::vector<std::vector<double>> rho;
 
+    // Instantaneous Volatility Calibration and Correlation Matrix
     CplVolCalibration cplVolCalibration(yearFractions, bonds, capvols, expiry); //dtau 1Y
-    cplVolCalibration.calibrate( /* intvol, rho*/);
-
-    // Interpolate the instvol from 1Y to 3M dtau something as VolatilityCurve (FittedVol, interpolator)
+    cplVolCalibration.calibrate( vols, rho);
 
     // Initialize the gaussians variates
     int size = expiry/dtau;
+    int count = simN * size * size;
+    std::vector<double> phi_random(count, 0.0);
     VSLRNGRandomGenerator vsl_gaussian;
-    vsl_gaussian(&phi_random[0], simN * size * size);
+    vsl_gaussian(&phi_random[0], count);
 
     // LMM - Interest Rate  Model
-    LiborMarketModel lmm(spot_rates, vols, rho, dtau, 5.0);
+    LiborMarketModel lmm(spot_rates, vols, rho, dtau, expiry);
+
+    // Generate one Exposure Profile by Simulation Step
+    std::vector<std::vector<double>> exposures(simN, std::vector<double>(size, 0.0));
 
     // Monte Carlo Simulation Engine generate the Exposure IRS Grid
-    MonteCarloSimulation<LiborMarketModel, InterestRateSwap> mc_engine(payOff, lmm, &phi_random[0], simN);
+    MonteCarloSimulation<LiborMarketModel, InterestRateSwap> mc_engine(payOff, lmm, phi_random, simN);
     mc_engine.calculate(exposures, duration);
 
-#if DEBUG_LMM
-    display_curve(exposures[s], "IRS Exposure");
-#endif
+    //display_curve(exposures[s], "IRS Exposure"); ///
 
     /*
      * Counter Party Credit Risk Analytics
@@ -135,33 +122,37 @@ int main() {
     // Recovery Rates
     double recovery = 0.04;
 
+    // Expected Exposure Profile
+    std::vector<cva_stats> stats_vector;
+    stats_vector.resize(size);
+
+    // Calculate Expected Exposure (EE)  EPE(t) = 𝔼 [max(V , 0)|Ft]
+    // Use reduction to generate the expectation on the distribution across timepoints the expected exposure profile for the IRS
+    // Calculate Statistics max, median, quartiles, 97.5th percentile on exposures
+    report_statistics(stats_vector, exposures, size, simN);
+
+    std::vector<double> expected_exposure(size, 0.0);
+    std::transform(stats_vector.begin(), stats_vector.begin() + size, expected_exposure.begin(), [](cva_stats s) {
+        return s.average;
+    });
+
+    // Report Expected Exposure Profile Curve
+    display_curve(expected_exposure, "Expected Exposure");
+
+    // Calculate Potential Future Exposure (PFE) at the 97.5th percentile and media of the Positive EE
+
     // Discounts  or Zero Coupon Bond bootstrapped from the Spot Rates
-    SpotRateYieldCurveTermStructure yieldCurve(spot_rates, 25.0, dtau);
+    SpotRateYieldCurveTermStructure yieldCurve(spot_rates, expiry, dtau);
 
     // Survival Probability Bootstrapping
     SurvivalProbabilityTermStructure survivalProbabilityCurve(tenors, spreads, yieldCurve, recovery, tenor_size); // dtau
 
-    // Expected Exposure Profile
-    std::vector<double> expected_exposure(simpoints_size, 0.0);
-
-    // Calculate Statistics max, median, quartiles, 97.5th percentile on exposures
-    // Calculate Potential Future Exposure (PFE) at the 97.5th percentile and media of the Positive EE
-
-    // Calculate Expected Exposure (EE)  EPE(t) = 𝔼 [max(V , 0)|Ft]
-    // Use reduction to generate the expectation on the distribution across timepoints the expected exposure profile for the IRS
-    reduce(expected_exposure, exposures, simpoints_size, simN);
-
-    // Report Expected Exposure Profile Curve
-#if DEBUG_EE
-    display_curve(expected_exposure, "Expected Exposure");
-#endif
-
     // Calculate The Unilateral CVA - Credit Value Adjustment Metrics Calculation.
     // For two conterparties A - B. Counterparty A want to know how much is loss in a contract due to B defaulting
-    ExpectedExposureTermStructure expectedExposureCurve(pricing_points,expected_exposure, expiry);
-    double cva = calculate_cva(recovery, yieldCurve, expected_exposure, survivalProbabilityCurve, pricing_points, expiry);
+    ExpectedExposureTermStructure expectedExposureCurve(floating_schedule,expected_exposure, expiry);
+    double cva = calculate_cva(recovery, yieldCurve, expected_exposure, survivalProbabilityCurve, floating_schedule, expiry);
 
-    std::cout << std::setprecision(6)<< std::fixed << cva << " " << simN << " " << duration << std::endl;
+    //std::cout << std::setprecision(6)<< std::fixed << cva << " " << simN << " " << duration << std::endl;
 
 
     exit(0);
