@@ -81,8 +81,9 @@ private:
     class Impl : public Constraint::Impl {
     public:
         bool test(const Array& params) const {
-            if ( (params[0] + params[3]) <= 0) return false;
-            if (params[2] <= 0) return false;
+            if ( (params[0] + params[1]) <= 0) return false;
+            if (params[3] <= 0) return false;
+            if (params[0] <= 0) return false;
             return true;
         }
         Array upperBound(const Array& params) const {
@@ -192,8 +193,7 @@ public:
     /* Parametric Calibration LMM in Practice Chapter 7 p 158 Equation (9.12) */
 
     inline double parametric_calibration(double Ti, double t, double a, double b, double c, double d) {
-        double val = (a + b*(Ti - t)) * std::exp(-c*(Ti - t)) + d;
-        std::cout << Ti << " " << a  << " " << b  << " "  << c << " " << d  << " " << val << std::endl;
+        double val = a + (b + c*(Ti - t)) * std::exp(-d*(Ti - t));
         return val;
     };
 
@@ -205,9 +205,13 @@ public:
     void volatility_fitting(std::vector<double> &instvols) {
 
         // LMM in practice Chapter 7 page 158 step 2 - create implied caplet volatilities for a curve
+        std::cout << "squared caplet implied volatilities multiplied by time to maturity" << std::endl;
+
         Array independentValues(capletvols.size());
         for (int i = 0; i < capletvols.size(); i++) {
-            independentValues[i] = tenor[i+1] * capletvols[i] * capletvols[i];
+            double val = tenor[i+1] * capletvols[i] * capletvols[i];
+            independentValues[i] = val;
+            std::cout << val << std::endl;
         }
 
         // initial values
@@ -218,10 +222,9 @@ public:
         double c = 0.1;
         double d = 0.1;
 
-        /*
         // LMM in practice Chapter 7 page 158 step 3 - define fFO - Objective function with a, b, c, d parameters
         std::vector<double> accuml(tenor.size(), 0.0);
-        std::vector<double> accuml2(tenor.size(), 0.0);
+        std::vector<double> squared_sum(tenor.size(), 0.0);
         std::vector<double> fFO(independentValues.size(), 0.0);
 
         // instantaneous volatility curve parametric expression phi * f(a, b, c, d , [Ti - 0])
@@ -229,20 +232,19 @@ public:
             double val = phi * parametric_calibration(x, 0.0, a, b, c, d);
             return val * val;
         });
-        std::partial_sum(accuml.begin(), accuml.end(), accuml2.begin(), std::plus<double>());
+        std::partial_sum(accuml.begin(), accuml.end(), squared_sum.begin(), std::plus<double>());
 
         for (int i = 1; i < accuml.size(); i++) {
-            accuml[i] = accuml2[i] - accuml2[i-1];
+            accuml[i] = squared_sum[i] - squared_sum[i-1];
         }
 
         std::partial_sum(accuml.begin()+1, accuml.end(), fFO.begin(), std::plus<double>());
-         */
 
         // create corresponding curve points to be approximated
-
         std::vector<boost::shared_ptr<CurvePoint>> curvePoints;
-        for (int i = 0; i < independentValues.size(); i++) {
-            double val = parametric_calibration(tenor[i+1], 0, a, b, c, d);
+        for (int i = 0; i < fFO.size(); i++) {
+            //double val = parametric_calibration(tenor[i+1], 0, a, b, c, d);
+            double val = fFO[i];
             curvePoints.push_back(boost::shared_ptr<CurvePoint>( new CurvePoint( val )));
         }
 
@@ -271,10 +273,19 @@ public:
         c = coefficients[2];
         d = coefficients[3];
 
+        std::cout << "results for parametric calibration" << std::endl;
+
+        std::cout <<  "coefficients " << a  << " " << b  << " "  << c << " " << d << std::endl;
+
+        std::cout << "fitted volatility function" << std::endl;
+
         instvols.resize(independentValues.size());
         for (unsigned int i = 0; i < independentValues.size(); i++) {
             instvols[i] = phi * parametric_calibration (tenor[i+1], 0.0, a, b, c, d);
+            std::cout <<  "day count fraction " << tenor[i+1] << " volatility: " << instvols[i] << std::endl;
         }
+
+        int p = 0;
     }
 
 
@@ -307,6 +318,12 @@ public:
 #endif
     }
 
+    /**
+     * Run the full calibration process
+     * @param instvols
+     * @param rho
+     * @param spot_rates
+     */
     void calibrate(std::vector<double> &instvols, std::vector<std::vector<double>> &rho, std::vector<double> &spot_rates) {
         caps_strikes();
         caplet_volatility_stripping(spot_rates);
@@ -324,8 +341,8 @@ private:
     std::vector<double> strikes;
     std::vector<double> cplvols;
     std::vector<double> capletvols = {
-        0.1641, 0.1641, 0.2015, 0.2189, 0.2365, 0.2550, 0.2212, 0.2255, 0.2298,
-        0.2341, 0.2097, 0.2083, 0.2077, 0.2051, 0.2007, 0.1982, 0.1959, 0.1938, 0.1925
+        0.1641, 0.1641, 0.1641, 0.2015, 0.2189, 0.2365, 0.2550, 0.2212, 0.2255, 0.2298,
+        0.2341, 0.2097, 0.2083, 0.2077, 0.2051, 0.2007, 0.1982, 0.1959, 0.1938
     };
 
 };
