@@ -75,6 +75,18 @@ private:
     double rate;
 };
 
+/* Parametric Calibration LMM in Practice Chapter 7 p 158 Equation (9.12) */
+
+inline double parametric_calibration(double t, double a, double b, double c, double d, double Ti) {
+    double val = a + (b + c*(Ti - t)) * std::exp(-d*(Ti - t));
+    return val;
+};
+
+inline double squared_parametric_calibration(double t, double a, double b, double c, double d, double Ti) {
+    double val = parametric_calibration(t, a, b, c, d, Ti);
+    return val * val;
+};
+
 /* Optimization Contraint */
 class FittingVolConstraint : public Constraint {
 private:
@@ -83,7 +95,7 @@ private:
         bool test(const Array& params) const {
             if ( (params[0] + params[1]) <= 0) return false;
             if (params[3] <= 0) return false;
-            if (params[0] <= 0) return false;
+            //if (params[0] <= 0) return false;
             return true;
         }
         Array upperBound(const Array& params) const {
@@ -190,12 +202,6 @@ public:
 
     }
 
-    /* Parametric Calibration LMM in Practice Chapter 7 p 158 Equation (9.12) */
-
-    inline double parametric_calibration(double Ti, double t, double a, double b, double c, double d) {
-        double val = a + (b + c*(Ti - t)) * std::exp(-d*(Ti - t));
-        return val;
-    };
 
     /*
      * Volatility Fitting - solve optimization problem  argmin sum[cplvols - fitvols]^2 using least square methods
@@ -217,33 +223,39 @@ public:
         // initial values
         double t = 0.0; // As seen for today
         const double phi = 1.0;
-        double a = 0.1;
-        double b = 0.1;
-        double c = 0.1;
-        double d = 0.1;
+        double a = 0.1; //0.112346;
+        double b = 0.1; //-0.441811;
+        double c = 0.1; //0.971559; //0.1;
+        double d = 0.1; //1.223058; //0.1;
 
         // LMM in practice Chapter 7 page 158 step 3 - define fFO - Objective function with a, b, c, d parameters
-        std::vector<double> accuml(tenor.size(), 0.0);
-        std::vector<double> squared_sum(tenor.size(), 0.0);
+        // https://www.quantlib.org/slides/dima-ql-intro-2.pdf Integral Calculation p8
+        std::vector<double> squares_integrals(tenor.size(), 0.0);
+        std::vector<double> difference_integrals(tenor.size(), 0.0);
         std::vector<double> fFO(independentValues.size(), 0.0);
 
-        // instantaneous volatility curve parametric expression phi * f(a, b, c, d , [Ti - 0])
-        std::transform(tenor.begin(), tenor.end(), accuml.begin(), [&](double x) {
-            double val = phi * parametric_calibration(x, 0.0, a, b, c, d);
-            return val * val;
-        });
-        std::partial_sum(accuml.begin(), accuml.end(), squared_sum.begin(), std::plus<double>());
+        // instantaneous volatility curve parametric expression f(a, b, c, d , [Ti - 0])
+        boost :: function < Real ( Real )> ptrF ;
+        ptrF = boost :: bind (& squared_parametric_calibration , t , a ,b , c , d , _1 );
 
-        for (int i = 1; i < accuml.size(); i++) {
-            accuml[i] = squared_sum[i] - squared_sum[i-1];
+        Real absAcc = 0.000001;
+        Size maxEval = 1000;
+        SimpsonIntegral numInt(absAcc, maxEval);
+
+        std::transform(tenor.begin(), tenor.end(), squares_integrals.begin(), [&](double x) {
+            return numInt(ptrF, 0, x);
+        });
+
+        for (int i = 1; i < difference_integrals.size(); i++) {
+            difference_integrals[i] = squares_integrals[i] - squares_integrals[i-1];
         }
 
-        std::partial_sum(accuml.begin()+1, accuml.end(), fFO.begin(), std::plus<double>());
+        std::partial_sum(difference_integrals.begin()+1, difference_integrals.end(), fFO.begin(), std::plus<double>());
 
         // create corresponding curve points to be approximated
         std::vector<boost::shared_ptr<CurvePoint>> curvePoints;
         for (int i = 0; i < fFO.size(); i++) {
-            //double val = parametric_calibration(tenor[i+1], 0, a, b, c, d);
+            //double val = parametric_calibration(0, a, b, c, d, tenor[i+1]);
             double val = fFO[i];
             curvePoints.push_back(boost::shared_ptr<CurvePoint>( new CurvePoint( val )));
         }
@@ -281,7 +293,7 @@ public:
 
         instvols.resize(independentValues.size());
         for (unsigned int i = 0; i < independentValues.size(); i++) {
-            instvols[i] = phi * parametric_calibration (tenor[i+1], 0.0, a, b, c, d);
+            instvols[i] = phi * parametric_calibration (0.0, a, b, c, d, tenor[i+1]);
             std::cout <<  "day count fraction " << tenor[i+1] << " volatility: " << instvols[i] << std::endl;
         }
 
