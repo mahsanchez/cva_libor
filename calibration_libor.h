@@ -37,56 +37,28 @@ std::vector<double> capvols = {
     0.0, 0.1641, 0.1641, 0.1641, 0.1765, 0.1889, 0.2013, 0.2137, 0.2162, 0.2186, 0.2211, 0.2235, 0.2223, 0.2212, 0.2200, 0.2188, 0.2173, 0.2158, 0.2142, 0.2127
 };
 
-/*
- * Price a CAPLET using Black Formula
- */
-class cpl {
-public:
-       cpl(double _bond, double _yearFraction, double _strike, double _x, double _rate) :
-         bond(_bond), yearFraction(_yearFraction), strike(_strike), x(_x), rate(_rate)
-       {}
-
-       inline double d(double vol) {
-            double result = std::log(rate/x) + 0.5*vol*vol * yearFraction;
-            result /= vol * std::sqrt(yearFraction);
-            return result;
-       }
-
-       double operator()(double vol) {
-           double d1 = d(vol);
-           double d2 = d1 - vol * std::sqrt(yearFraction);
-           double result = rate * N( d1 ) - strike * N( d2 );
-           result *= bond;
-           return result;
-       }
-
-        double N(double val) {
-            double result = 0;
-            vdCdfNorm( 1, &val, &result );
-            return result;
-        }
-
-private:
-    double bond;
-    double x;
-    double yearFraction;
-    double strike;
-    double rate;
-};
 
 /*
  * Price a CAPLET using Black Formula
  */
-double caplet_price(double zcb, double yearFraction, double strike, double x, double rate, double vol) {
-    cpl caplet(zcb, yearFraction, strike, x, rate);
-    return caplet(vol);
+double BlackIRCaplet(double zcb, double yearFraction, double strike, double x, double rate, double vol) {
+    double d1 = std::log(rate/x) + 0.5*vol*vol * yearFraction;
+    d1 /= vol * std::sqrt(yearFraction);
+    double d2 = d1 - vol * std::sqrt(yearFraction);
+    double Nd1 = 0.0;
+    double Nd2 = 0.0;
+    vdCdfNorm( 1, &d1, &Nd1 );
+    vdCdfNorm( 1, &d2, &Nd2 );
+    double result = rate * Nd1 - strike * Nd2;
+    result *= zcb;
+    return result;
 }
 
 /**
  * Implied Caplet Volatility Problem LMM in Practice Algorithm 7.1
  */
 double impliedVolProb(double zcb, double yearFraction, double strike, double x, double fwd_rate, double vol, double cap, double cplet_price) {
-    return (cap - cplet_price - caplet_price(zcb, yearFraction,  strike, x, fwd_rate, vol));
+    return (cap - cplet_price - BlackIRCaplet(zcb, yearFraction,  strike, x, fwd_rate, vol));
 }
 
 /**
@@ -153,7 +125,7 @@ public:
 
         std::vector<double> acc(size);
         for (int i = 1; i < size; i++) {
-            acc[i] = caplet_price(zcb[i], yearFraction[i], strikes[i], strikes[i], spot_rates[i], capvols_mkt[i]);
+            acc[i] = BlackIRCaplet(zcb[i], yearFraction[i], strikes[i], strikes[i], spot_rates[i], capvols_mkt[i]);
         }
         std::partial_sum(acc.begin(), acc.end(), caps_quotes.begin());
 
@@ -174,7 +146,7 @@ public:
         for (int i = 2; i < cplvols.size(); i++) {
             double cplet_price = 0.0; // caplet_price
             for (int j = 1; j < i; j++) {
-                cplet_price += caplet_price(zcb[j], yearFraction[j], strikes[j], strikes[j], spot_rates[j],cplvols[j]);
+                cplet_price += BlackIRCaplet(zcb[j], yearFraction[j], strikes[j], strikes[j], spot_rates[j],cplvols[j]);
             }
             //calculate implied caplet volatility
             boost :: function < Real ( Volatility )> impliedVolFunc ;   // setup a boost function
@@ -378,7 +350,7 @@ public:
             }
         }
 
-#ifndef DEBUG_FITTEDVOL
+#ifdef DEBUG_FITTEDVOL
         std::cout << "Correlation Matrix" << std::endl;
         for (int i = 0; i < size; i++) {
             for (int j = 0; j < size; j++)

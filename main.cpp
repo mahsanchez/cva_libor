@@ -116,7 +116,7 @@ int main() {
     strippedCapletVolatility.caplet_volatility_stripping(cplvols, spot_rates_);
 
     // Parametric Calibration to Cap Prices & Correlation Matrix
-    CplVolCalibration cplVolCalibration(yearFractions, bonds, capvols, expiry); //dtau 1Y
+    CplVolCalibration cplVolCalibration(yearFractions, zcb, cplvols, expiry); //dtau 1Y
     cplVolCalibration.calibrate( vols, rho, spot_rates_);
 
     /**
