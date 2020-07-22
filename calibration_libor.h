@@ -41,16 +41,17 @@ std::vector<double> capvols = {
 /*
  * Price a CAPLET using Black Formula
  */
-double BlackIRCaplet(double zcb, double yearFraction, double strike, double x, double rate, double vol) {
-    double d1 = std::log(rate/x) + 0.5*vol*vol * yearFraction;
+double BlackIRCaplet(double zcb, double yearFraction, double strike, double x, double fwd_rate, double vol) {
+    double d1 = std::log(fwd_rate/x) + 0.5*vol*vol * yearFraction;
     d1 /= vol * std::sqrt(yearFraction);
     double d2 = d1 - vol * std::sqrt(yearFraction);
     double Nd1 = 0.0;
     double Nd2 = 0.0;
     vdCdfNorm( 1, &d1, &Nd1 );
     vdCdfNorm( 1, &d2, &Nd2 );
-    double result = rate * Nd1 - strike * Nd2;
+    double result = fwd_rate * Nd1 - strike * Nd2;
     result *= zcb;
+    result *= yearFraction;
     return result;
 }
 
