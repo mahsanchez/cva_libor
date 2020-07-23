@@ -28,10 +28,16 @@ std::vector<double> zcb = {
         0.9145031, 0.9068886, 0.8990590, 0.8911017, 0.8833709, 0.8754579, 0.8673616, 0.8581725
 };
 
+
 // Year Fractions
 std::vector<double> yearFractions_ = {
         0.25000, 0.25278, 0.25556, 0.25556, 0.25000, 0.25278, 0.25556, 0.25556, 0.25000, 0.25278, 0.25556, 0.25556, 0.25278, 0.25278, 0.26111,
-        0.25278, 0.25278, 0.25278, 0.25278, 0.25278, 0.25278, 0.25278, 0.25278
+        0.25278, 0.25278, 0.25278, 0.25278, 0.25278
+};
+
+std::vector<double> yearFractions0_ = {
+        0.0, 0.248804, 0.501322, 0.502435, 0.859816, 1.08345, 1.30411, 2.35441, 1.95083, 2.19285, 2.43783, 3.4725, 3.08374,  3.31253, 3.63714,
+        3.97711, 4.16463, 4.41673, 4.66739, 4.81921
 };
 
 // First row is the last observed forward curve (BOE data)  //  3-dimensional Normal random vector in columns BC, BD, BE (on far right)
@@ -111,7 +117,7 @@ int main() {
     std::vector<double> cplvols;
 
     // StrippedCapletVolatility
-    StrippedCapletVolatility strippedCapletVolatility(yearFractions_, zcb, capvols_mkt, expiry, dtau);
+    StrippedCapletVolatility strippedCapletVolatility(yearFractions0_,yearFractions_, zcb, capvols_mkt, expiry, dtau);
     strippedCapletVolatility.caps_strikes();
     strippedCapletVolatility.caplet_volatility_stripping(cplvols, spot_rates_);
 

@@ -27,24 +27,14 @@ std::vector<double> yearFractions = {
      0.25278, 0.25278, 0.25278, 0.25278, 0.25278, 0.25278, 0.25278, 0.25278
 };
 
-std::vector<double> bonds = { //zcb
-    0.9947527, 0.9892651, 0.9834984, 0.9774658, 0.9712884, 0.9648035, 0.9580084, 0.9509789, 0.9440868, 0.9369436, 0.9295484, 0.9219838,
-    0.9145031, 0.9068886, 0.8990590, 0.8911017, 0.8833709, 0.8754579, 0.8673616, 0.8581725
-};
-
-// MArket Cap Volatility
-std::vector<double> capvols = {
-    0.0, 0.1641, 0.1641, 0.1641, 0.1765, 0.1889, 0.2013, 0.2137, 0.2162, 0.2186, 0.2211, 0.2235, 0.2223, 0.2212, 0.2200, 0.2188, 0.2173, 0.2158, 0.2142, 0.2127
-};
-
 
 /*
  * Price a CAPLET using Black Formula
  */
-double BlackIRCaplet(double zcb, double yearFraction, double strike, double x, double fwd_rate, double vol) {
-    double d1 = std::log(fwd_rate/x) + 0.5*vol*vol * yearFraction;
-    d1 /= vol * std::sqrt(yearFraction);
-    double d2 = d1 - vol * std::sqrt(yearFraction);
+double BlackIRCaplet(double zcb, double yearFraction0, double yearFraction, double strike, double x, double fwd_rate, double vol) {
+    double d1 = std::log(fwd_rate/x) + 0.5*vol*vol * yearFraction0;
+    d1 /= vol * std::sqrt(yearFraction0);
+    double d2 = d1 - vol * std::sqrt(yearFraction0);
     double Nd1 = 0.0;
     double Nd2 = 0.0;
     vdCdfNorm( 1, &d1, &Nd1 );
@@ -58,8 +48,8 @@ double BlackIRCaplet(double zcb, double yearFraction, double strike, double x, d
 /**
  * Implied Caplet Volatility Problem LMM in Practice Algorithm 7.1
  */
-double impliedVolProb(double zcb, double yearFraction, double strike, double x, double fwd_rate, double vol, double cap, double cplet_price) {
-    return (cap - cplet_price - BlackIRCaplet(zcb, yearFraction,  strike, x, fwd_rate, vol));
+double impliedVolProblem(double zcb, double yearFraction0, double yearFraction, double strike, double x, double fwd_rate, double vol, double cap, double cplet_price) {
+    return (cap - cplet_price - BlackIRCaplet(zcb, yearFraction0, yearFraction, strike, x, fwd_rate, vol));
 }
 
 /**
@@ -68,8 +58,8 @@ double impliedVolProb(double zcb, double yearFraction, double strike, double x, 
 
 class StrippedCapletVolatility {
 public:
-    StrippedCapletVolatility(std::vector<double> &yearFraction_, std::vector<double> &zcb_, std::vector<double> &capvols_, double expiry_, double dtau_) :
-    yearFraction(yearFraction_), zcb(zcb_), capvols_mkt(capvols_), expiry(expiry_), dtau(dtau_) {
+    StrippedCapletVolatility(std::vector<double> &yearFraction0_, std::vector<double> &yearFraction_, std::vector<double> &zcb_, std::vector<double> &capvols_, double expiry_, double dtau_) :
+        yearFraction0(yearFraction0_), yearFraction(yearFraction_), zcb(zcb_), capvols_mkt(capvols_), expiry(expiry_), dtau(dtau_) {
         strikes.resize(zcb.size(), 0.0);
     }
 
@@ -102,7 +92,7 @@ public:
     }
 
     // Implied Caplet Volatility - LMM in Practice Algorithm 7.1
-    void caplet_volatility_stripping(std::vector<double> cplvols, std::vector<double> &spot_rates) {
+    void caplet_volatility_stripping(std::vector<double> &cplvols, std::vector<double> &spot_rates) {
         int size = zcb.size();
 
         // calculate spot_rates
@@ -126,7 +116,7 @@ public:
 
         std::vector<double> acc(size);
         for (int i = 1; i < size; i++) {
-            acc[i] = BlackIRCaplet(zcb[i], yearFraction[i], strikes[i], strikes[i], spot_rates[i], capvols_mkt[i]);
+            acc[i] = BlackIRCaplet(zcb[i], yearFraction0[i], yearFraction[i], strikes[i], strikes[i], spot_rates[i], capvols_mkt[i]);
         }
         std::partial_sum(acc.begin(), acc.end(), caps_quotes.begin());
 
@@ -139,29 +129,31 @@ public:
         // 1D Root Finding Solver using Bisection Method
         Bisection root_solver;
 
-        // TODO - Interpolation for 3M, 6M, 9M from 1Y store those values in capvols[]
         // LMM in Practice chapter 7 p76 Algorithm 7.1
         cplvols.resize(size);
         cplvols[1] = 0.1641;     // 6M
-        //Caculate Implied Caplet Volatilities
+
         for (int i = 2; i < cplvols.size(); i++) {
             double cplet_price = 0.0; // caplet_price
             for (int j = 1; j < i; j++) {
-                cplet_price += BlackIRCaplet(zcb[j], yearFraction[j], strikes[j], strikes[j], spot_rates[j],cplvols[j]);
+                cplet_price += BlackIRCaplet(zcb[j], yearFraction0[j], yearFraction[j], strikes[j], strikes[j], spot_rates[j], cplvols[j]);
             }
+#ifdef DEBUG_IMPLIEDCAPLETVOL
+            std::cout << "caps " << caps_quotes[i] << " caplet price " << cplet_price << std::endl;
+#endif
             //calculate implied caplet volatility
             boost :: function < Real ( Volatility )> impliedVolFunc ;   // setup a boost function
             // bind the boost function to all market parameters , keep vol as variant
-            impliedVolFunc = boost :: bind (& impliedVolProb , zcb[i], yearFraction[i], strikes[i], strikes[i], spot_rates[i], _1, caps_quotes[i], cplet_price);
+            impliedVolFunc = boost :: bind (& impliedVolProblem , zcb[i], yearFraction0[i], yearFraction[i], strikes[i], strikes[i], spot_rates[i], _1, caps_quotes[i], cplet_price);
             // root finding using interval bisection algorithm
-            cplvols[i] = root_solver.solve(impliedVolFunc, 1E-6, 0.1600, 0.1500, 0.25);
+            cplvols[i] = root_solver.solve(impliedVolFunc, 1E-6, 0.12, 0.10, 0.35);
         }
 
 #ifdef DEBUG_IMPLIEDCAPLETVOL
         // LMM in Practice chapter 7 p77 Table 7.5
-        std::cout << "Caplet Volatilites Stripped from cap volatilities" << std::endl;
-        for (int i = 0; i < cplvols.size(); i++) {
-            std::cout << tenor[i]  << " " << capvols[i] << " " << cplvols[i] << std::endl;
+        std::cout << "Caplet Volatilites Stripped from cap volatilities (cap vol, refernce implied capvol, implied cpvol)" << std::endl;
+        for (int i = 1; i < cplvols.size(); i++) {
+            std::cout << tenor[i]  << " " << capvols_mkt[i]  << " " << capletvols[i] << " " << cplvols[i] << std::endl;
         }
 #endif
     }
@@ -169,12 +161,13 @@ public:
 private:
     double dtau;
     double expiry;
+    std::vector<double> &yearFraction0;
     std::vector<double> &yearFraction;
     std::vector<double> &zcb;
     std::vector<double> &capvols_mkt;
     std::vector<double> strikes;
     std::vector<double> capletvols = {
-            0.1641, 0.1641, 0.1641, 0.2015, 0.2189, 0.2365, 0.2550, 0.2212, 0.2255, 0.2298,
+            0.0, 0.1641, 0.1641, 0.1641, 0.2015, 0.2189, 0.2365, 0.2550, 0.2212, 0.2255, 0.2298,
             0.2341, 0.2097, 0.2083, 0.2077, 0.2051, 0.2007, 0.1982, 0.1959, 0.1938
     };
 };
@@ -327,7 +320,7 @@ public:
         // LMM in Practice Chapter 9 p160 table 9.16
         std::cout << "fitted volatility function" << std::endl;
         for (unsigned int i = 0; i < independentValues.size(); i++) {
-            std::cout <<  "day count fraction " << tenor[i+1]  << " volatility " << instvols[i] << std::endl;
+            std::cout <<  "tenor " << tenor[i+1]  << " volatility " << instvols[i] << std::endl;
         }
 #endif
     }
