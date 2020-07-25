@@ -7,14 +7,10 @@
 
 #include "mkl_lapacke.h"
 
-#include "curvepoint.h"
-#include "leastsquares.h"
-
+#include <ql/quantlib.hpp>
 #include <ql/math/solvers1d/bisection.hpp>
 
-#define DEBUG_CAPSTRIPPING 10
-#define DEBUG_IMPLIEDCAPLETVOL 10
-#define DEBUG_FITTEDVOL 10
+using namespace QuantLib;
 
 // number of days since (Ti - T0)/360
 std::vector<double> tenor = {
@@ -26,7 +22,6 @@ std::vector<double> yearFractions = {
      0.25000, 0.25278, 0.25556, 0.25556, 0.25000, 0.25278, 0.25556, 0.25556, 0.25000, 0.25278, 0.25556, 0.25556, 0.25278, 0.25278, 0.26111,
      0.25278, 0.25278, 0.25278, 0.25278, 0.25278, 0.25278, 0.25278, 0.25278
 };
-
 
 /*
  * Price a CAPLET using Black Formula
@@ -190,6 +185,77 @@ inline double squared_parametric_calibration(double t, double a, double b, doubl
 };
 
 /*
+ * Least Squares Function
+ */
+class LeastSquares : public CostFunction {
+public:
+    LeastSquares(Array& independentValues_, std::vector<double> &tenor_) : independentValues(independentValues_), tenor(tenor_){
+    }
+
+    Real value(const Array& x) const {
+        Array differences = values(x);
+        Real sumOfSquaredDifferences = 0.0;
+        for (unsigned int i = 0; i < differences.size(); i++)
+        {
+            sumOfSquaredDifferences += differences[i] * differences[i];
+        }
+
+        std::cout << "Cost Function " << std::sqrt(sumOfSquaredDifferences) << " " << x << std::endl;
+
+        return std::sqrt(sumOfSquaredDifferences);
+    }
+
+    // LMM in practice Chapter 7 page 158 step 3 - define fFO - Objective function with a, b, c, d parameters
+    // https://www.quantlib.org/slides/dima-ql-intro-2.pdf Integral Calculation p8
+    // calculate differences between all observed and estimated values using
+    // function pointers to calculate estimated value using a set of given parameters
+    Disposable<Array> values(const Array& x) const
+    {
+        // fFO[i] Vector calculation
+        // instantaneous volatility curve parametric expression f(t, a, b, c, d , [Ti - t])
+        std::vector<double> squares_integrals(tenor.size(), 0.0);
+        std::vector<double> difference_integrals(tenor.size(), 0.0);
+        std::vector<double> fFO(independentValues.size(), 0.0);
+
+        boost :: function < Real ( Real )> ptrF ;
+        ptrF = boost :: bind (& squared_parametric_calibration , 0.0 , x[0], x[1], x[2], x[3], _1 );
+
+        Real absAcc = 0.00001;
+        Size maxEval = 10000;
+        SimpsonIntegral numInt(absAcc, maxEval);
+
+        std::transform(tenor.begin(), tenor.end(), squares_integrals.begin(), [&](double value) {
+            return numInt(ptrF, 0, value);
+        });
+
+        for (int i = 1; i < difference_integrals.size(); i++) {
+            difference_integrals[i] = squares_integrals[i] - squares_integrals[i-1];
+        }
+
+        std::partial_sum(difference_integrals.begin()+1, difference_integrals.end(), fFO.begin());
+
+        // Least Squares Differences
+        Array differences(independentValues.size());
+        for (unsigned int i = 0; i < independentValues.size(); i++)
+        {
+            differences[i] = independentValues[i] - fFO[i];
+        }
+
+        return differences;
+    }
+
+
+    virtual Real valueAndGradient(Array &grad, const Array& x) const {
+        gradient(grad, x);
+        return value(x);
+    }
+
+private:
+    Array& independentValues;
+    std::vector<double> &tenor;
+};
+
+/*
  * Optimization Contraints
  * Constraint the a,b,c,d domain such that parametric function a + (b + c*(Ti - t)) * std::exp(-d*(Ti - t)) shows an exponential decae
  */
@@ -198,17 +264,15 @@ private:
     class Impl : public Constraint::Impl {
     public:
         bool test(const Array& params) const {
-            if ( (params[0] + params[1]) <= 0) return false;
+            if ( (params[0] + params[1]) <= 0.0) return false;
             if (params[3] <= 0.0) return false;
             return true;
         }
         Array upperBound(const Array& params) const {
-            return Array(params.size(),2.0);
+            return Array(params.size(), std::numeric_limits < Array::value_type > ::max()); //
         }
         Array lowerBound(const Array& params) const {
-            Array lower_bound(params.size(), 0.0);
-            lower_bound[1] = -0.2;
-            lower_bound[3] = 0.9;
+            Array lower_bound(params.size(), -2.0);
             return lower_bound;
         }
     };
@@ -228,10 +292,8 @@ public:
     /*
      * Volatility Fitting - solve optimization problem  argmin sum[cplvols - fitvols]^2 using least square methods
      * LMM in practice Chapter 9
-     * QuantLib Least Squares Method implementation http://mikejuniperhill.blogspot.com/2016/04/quantlib-least-squares-method.html
      */
     void volatility_fitting(std::vector<double> &instvols) {
-
         // LMM in practice Chapter 7 page 158 step 2 - create implied caplet volatilities for a curve
         std::cout << "squared caplet implied volatilities multiplied by time to maturity" << std::endl;
 
@@ -245,82 +307,59 @@ public:
         // initial values
         double t = 0.0; // As seen for today
         const double phi = 1.0;
-        double a = 0.1; //0.112346;
-        double b = 0.1; //-0.441811;
-        double c = 0.1; //0.971559; //0.1;
-        double d = 0.1; //1.223058; //0.1;
 
-        // LMM in practice Chapter 7 page 158 step 3 - define fFO - Objective function with a, b, c, d parameters
-        // https://www.quantlib.org/slides/dima-ql-intro-2.pdf Integral Calculation p8
-        std::vector<double> squares_integrals(tenor.size(), 0.0);
-        std::vector<double> difference_integrals(tenor.size(), 0.0);
-        std::vector<double> fFO(independentValues.size(), 0.0);
+        //instantiate Constraint
+        FittingVolConstraint parametricConstraint;
 
-        // instantaneous volatility curve parametric expression f(a, b, c, d , [Ti - 0])
-        boost :: function < Real ( Real )> ptrF ;
-        ptrF = boost :: bind (& squared_parametric_calibration , t , a ,b , c , d , _1 );
+        Size maxIterations = 100000; // end search if after 10000 iterations if no solution
+        Size minStatIterations = 10; // don't spend more than 10 iterations in a single point
+        Real rootEpsilon = 1e-5; // end search if absolute difference of current and last fraction value is under a threshold
+        Real functionEpsilon = 1e-5; // end search if absolute difference of current and last function value is under a threshold
+        Real gradientEpsilon = 1e-5; //0.00001; // end search if absolute difference of norm of current and last gradient is bellow epsilum
 
-        Real absAcc = 0.00001;
-        Size maxEval = 10000;
-        SimpsonIntegral numInt(absAcc, maxEval);
+        EndCriteria endCriteria(maxIterations, minStatIterations, rootEpsilon, functionEpsilon, gradientEpsilon);
+        Array InitVal(4, 0.1);
 
-        std::transform(tenor.begin(), tenor.end(), squares_integrals.begin(), [&](double x) {
-            return numInt(ptrF, 0, x);
-        });
+        LeastSquares leastSquares(independentValues, tenor);
+        Problem getValues(leastSquares, parametricConstraint, InitVal);
 
-        for (int i = 1; i < difference_integrals.size(); i++) {
-            difference_integrals[i] = squares_integrals[i] - squares_integrals[i-1];
-        }
+        // Methods
+        SteepestDescent sd;
+        ConjugateGradient cg;
+        BFGS sol;
 
-        std::partial_sum(difference_integrals.begin()+1, difference_integrals.end(), fFO.begin(), std::plus<double>());
+        // if the algorithm is able to locate an optimal solution it will stop searching at the stationary point in the search space
+        EndCriteria::Type solution = sd.minimize(getValues, endCriteria);
 
-        // create corresponding curve points to be approximated
-        std::vector<boost::shared_ptr<CurvePoint>> curvePoints;
-        for (int i = 0; i < fFO.size(); i++) {
-            //double val = parametric_calibration(0, a, b, c, d, tenor[i+1]);
-            double val = fFO[i];
-            curvePoints.push_back(boost::shared_ptr<CurvePoint>( new CurvePoint( val )));
-        }
+        Array coefficients = getValues.currentValue();
 
-        // create container for function pointers for calculating rate approximations
-        std::vector<boost::function<Real(const Array&)>> dependentFunctions;
-
-        // for each curve point object, bind function pointer to operator() and add it into container
-        for (unsigned int i = 0; i < curvePoints.size(); i++)
-        {
-            dependentFunctions.push_back(boost::bind(&CurvePoint::operator(), curvePoints[i], _1));
-        }
-
-        // perform least squares fitting and print optimized coefficients
-        LeastSquares leastSquares(boost::shared_ptr<OptimizationMethod>(new LevenbergMarquardt), 10000, 1000, 1E-09, 1E-09, 1E-09);
-        FittingVolConstraint parametersConstraint;
-        Array initialParameters(4, 0.1);
-        Array coefficients = leastSquares.Fit(independentValues, dependentFunctions, initialParameters, parametersConstraint);
-
+        // LMM in Practice Chapter 9 p159 results a,b,c,d under 9.15
 #ifdef DEBUG_FITTEDVOL
         std::cout << "Results for parametric calibration coefficients" << std::endl;
-        for (unsigned int i = 0; i < coefficients.size(); i++) {
-            std::cout << coefficients[i] << std::endl;
-        }
+        std::cout << "Solution type: %" << std::endl;
+        std::cout << "Root: %" << coefficients << std::endl;
+        std::cout << "Reference Min F Value: 0.0436646" << " Actual Min F Value: %" << getValues.functionValue() << std::endl;
 #endif
-        a = coefficients[0];
-        b = coefficients[1];
-        c = coefficients[2];
-        d = coefficients[3];
 
+        double a = coefficients[0];  //0.112346;
+        double b = coefficients[1];  //-0.441811;
+        double c = coefficients[2];  //0.971559;
+        double d = coefficients[3];  //1.223058;
+
+        std::vector<double> reference_instvols(independentValues.size());
         instvols.resize(independentValues.size());
         for (unsigned int i = 0; i < independentValues.size(); i++) {
             instvols[i] = phi * parametric_calibration (0.0, a, b, c, d, tenor[i+1]);
+            reference_instvols[i] = phi * parametric_calibration (0.0, 0.112346, -0.441811, 0.971559, 1.223058, tenor[i+1]);
         }
 
 #ifdef DEBUG_FITTEDVOL
-        // LMM in Practice Chapter 9 p159 results a,b,c,d under 9.15
-        std::cout << "Results for parametric calibration" << std::endl;
-        std::cout <<  "coefficients " << a  << " " << b  << " "  << c << " " << d << std::endl;
+        std::cout <<  "reference coefficients " << 0.112346  << " " << -0.441811  << " "  << 0.971559 << " " << 1.223058 << std::endl;
+        std::cout <<  "actual coefficients " << a  << " " << b  << " "  << c << " " << d << std::endl;
         // LMM in Practice Chapter 9 p160 table 9.16
         std::cout << "fitted volatility function" << std::endl;
-        for (unsigned int i = 0; i < independentValues.size(); i++) {
-            std::cout <<  "tenor " << tenor[i+1]  << " volatility " << instvols[i] << std::endl;
+        for (unsigned int i = 0; i < instvols.size(); i++) {
+            std::cout <<  "tenor " << tenor[i+1]  << " reference instantaneous volatility " << reference_instvols[i] <<  " actual instantaneous volatility " << instvols[i] << std::endl;
         }
 #endif
     }

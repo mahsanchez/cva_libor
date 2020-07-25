@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.15)
 project(untitled)
 
+add_definitions(-DDEBUG_CAPSTRIPPING -DDEBUG_IMPLIEDCAPLETVOL -DDEBUG_FITTEDVOL)
+
 set(CMAKE_FIND_DEBUG_MODE 10)
 
 set(CMAKE_CXX_STANDARD 14)
 set(SOURCE_FILES main.cpp)
-set(SOURCE_FILES calibration.h)
 set(SOURCE_FILES calibration_libor.h)
 set(SOURCE_FILES simulation.h)
 set(SOURCE_FILES product.h)
