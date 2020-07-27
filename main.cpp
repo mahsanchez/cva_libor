@@ -209,6 +209,9 @@ int main() {
     // Calculate The Unilateral CVA - Credit Value Adjustment Metrics Calculation.
     // For two conterparties A - B. Counterparty A want to know how much is loss in a contract due to B defaulting
 
+    expected_exposure = {0.0, 0.253899346, 0.262649146,0.264752078 , 0.269196504, 0.26545791, 0.258220705,	0.251405001, 0.244940384, 0.232968488, 0.21709824,
+                         0.201386603, 0.184246938, 0.164233229, 0.142736561, 0.121057271, 0.098013021, 0.07231877, 0.042947986, 0.0 };
+
     InterpolatedFICurve expectedExposureCurve(tenor, expected_exposure);
 
     /*
