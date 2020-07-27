@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 project(untitled)
 
-add_definitions(-DDEBUG_CAPSTRIPPING -DDEBUG_IMPLIEDCAPLETVOL -DDEBUG_FITTEDVOL)
+add_definitions(-DDEBUG_CAPSTRIPPING -DDEBUG_IMPLIEDCAPLETVOL -DDEBUG_FITTEDVOL -DDEBUG_LMM_NUMERAIRE -DDEBUG_EXPOSURE_CVA -DDEBUG_CDS_CVA)
 
 set(CMAKE_FIND_DEBUG_MODE 10)
 
@@ -11,8 +11,6 @@ set(SOURCE_FILES calibration_libor.h)
 set(SOURCE_FILES simulation.h)
 set(SOURCE_FILES product.h)
 set(SOURCE_FILES q_numerics.h)
-set(SOURCE_FILES curvepoint.h)
-set(SOURCE_FILES leastsquares.h)
 
 file(GLOB SOURCES *.h *.cpp *.hpp)
 

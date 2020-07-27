@@ -286,8 +286,8 @@ public:
 
 class CplVolCalibration {
 public:
-    CplVolCalibration(std::vector<double> &yearFraction_, std::vector<double> &bonds_, std::vector<double> &capletvols_, double expiry_) :
-       yearFraction(yearFraction_), bonds(bonds_), cplvols(capletvols_), expiry(expiry_), dtau(0.25) {}
+    CplVolCalibration(std::vector<double> &yearFraction_, std::vector<double> &capletvols_, double expiry_) :
+       yearFraction(yearFraction_), cplvols(capletvols_), expiry(expiry_), dtau(0.25) {}
 
     /*
      * Volatility Fitting - solve optimization problem  argmin sum[cplvols - fitvols]^2 using least square methods
@@ -327,6 +327,7 @@ public:
         SteepestDescent sd;
         ConjugateGradient cg;
         BFGS sol;
+        LevenbergMarquardt lm;
 
         // if the algorithm is able to locate an optimal solution it will stop searching at the stationary point in the search space
         EndCriteria::Type solution = sd.minimize(getValues, endCriteria);
@@ -399,9 +400,8 @@ public:
      * Run the full calibration process
      * @param instvols
      * @param rho
-     * @param spot_rates
      */
-    void calibrate(std::vector<double> &instvols, std::vector<std::vector<double>> &rho, std::vector<double> &spot_rates) {
+    void calibrate(std::vector<double> &instvols, std::vector<std::vector<double>> &rho) {
         volatility_fitting(instvols);
         correlation(rho, instvols.size());
     }
@@ -410,7 +410,6 @@ private:
     double dtau;
     double expiry;
     std::vector<double> &yearFraction;
-    std::vector<double> &bonds;
     std::vector<double> cplvols;
     std::vector<double> capletvols = {
         0.1641, 0.1641, 0.1641, 0.2015, 0.2189, 0.2365, 0.2550, 0.2212, 0.2255, 0.2298,
