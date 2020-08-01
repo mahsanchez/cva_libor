@@ -70,25 +70,54 @@ struct cva_stats {
     double median;
     double max;
     double quantile_75;
+    double quantile_95;
     double quartiles;
 };
 
 
+/**
+ * Calculate General Statistis (Mean, Percentile 95%)
+ * @param stats_vector
+ * @param exposures
+ * @param timepoints_size
+ * @param simN
+ */
+ /*
 void report_statistics(std::vector<cva_stats>& stats_vector, std::vector<std::vector<double>>& exposures, int timepoints_size, int simN) {
+    std::vector<double> _distribution(simN);
     for (int t = 0; t < timepoints_size; t++) {
-        accumulator_set<double, stats<tag::mean, tag::p_square_quantile, tag::max > > acc(quantile_probability = 0.75 );;
+        accumulator_set<double, stats<tag::mean, tag::p_square_quantile, tag::max > > acc(quantile_probability = 0.95 );;
         for (int simulation = 0; simulation < simN; simulation++) {
-            acc( exposures[t][simulation] );
+            acc( exposures[simulation][t] );
         }
         stats_vector[t].average = mean(acc);
-        stats_vector[t].quantile_75 = p_square_quantile(acc);
+        stats_vector[t].quantile_95 = p_square_quantile(acc);
         stats_vector[t].max = boost::accumulators::max(acc);;
         acc = {};
     }
 }
+*/
+void report_statistics(std::vector<cva_stats>& stats_vector, std::vector<std::vector<double>>& exposures, int timepoints_size, int simN) {
+    std::vector<Real> _distribution(simN);
+    GeneralStatistics statistics;
 
-/**
- *
+    for (int t = 0; t < timepoints_size; t++) {
+        for (int s = 0; s < simN; s++) {
+            _distribution[s] = exposures[s][t];
+        }
+        statistics.addSequence(_distribution.begin(), _distribution.end());
+
+        stats_vector[t].average = statistics.mean();
+        stats_vector[t].quantile_75 = statistics.percentile(0.75);
+        stats_vector[t].quantile_95 = statistics.percentile(0.95);
+        stats_vector[t].max = statistics.max();
+
+        statistics.reset();
+    }
+}
+
+/*
+ * Main Entry Point
  */
 
 int main() {
@@ -180,9 +209,19 @@ int main() {
 
     // Report Expected Exposure Profile Curve
 #ifdef DEBUG_EXPOSURE_CVA
-    std::cout << "Expected Exposure" << std::endl;
+    std::cout << "Tenors" << std::endl;
+    for (int j = 0; j < tenor.size(); j++) {
+        std::cout << tenor[j] << " ";
+    }
+    std::cout << std::endl;
+    std::cout << "Expected Exposure EE[t]" << std::endl;
     for (int j = 0; j < expected_exposure.size(); j++) {
         std::cout << expected_exposure[j] << " ";
+    }
+    std::cout << std::endl;
+    std::cout << "Potential Future Exposure (0.95) PFE[t]" << std::endl;
+    for (int j = 0; j < stats_vector.size(); j++) {
+        std::cout << stats_vector[j].quantile_95 << " ";
     }
     std::cout << std::endl;
 #endif
@@ -209,8 +248,10 @@ int main() {
     // Calculate The Unilateral CVA - Credit Value Adjustment Metrics Calculation.
     // For two conterparties A - B. Counterparty A want to know how much is loss in a contract due to B defaulting
 
+    /*
     expected_exposure = {0.0, 0.253899346, 0.262649146,0.264752078 , 0.269196504, 0.26545791, 0.258220705,	0.251405001, 0.244940384, 0.232968488, 0.21709824,
                          0.201386603, 0.184246938, 0.164233229, 0.142736561, 0.121057271, 0.098013021, 0.07231877, 0.042947986, 0.0 };
+    */
 
     InterpolatedFICurve expectedExposureCurve(tenor, expected_exposure);
 
